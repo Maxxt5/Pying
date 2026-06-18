@@ -1,0 +1,255 @@
+# =========================================================
+# Pying Oficial code v3.1 → Wednesday/June/17/2026
+# =========================================================
+import os
+import sys
+import time
+
+class Pying:
+    nodes = {}
+    globals = {}
+    functions = {}
+    instances = set()
+    keys = {}
+    floor = {"dist": 20, "form": " "}
+    current_node = None
+    user_loop = None
+    screen_height = 7  # Altura de la pantalla para simular salto y gravedad
+
+def new(name):
+    Pying.nodes[name] = {
+        "name": name,
+        "props": {},
+        "parent": None
+    }
+    return Pying.nodes[name]
+
+class PropManager:
+    def __init__(self, node_name):
+        self._node_name = node_name
+
+    def __getattr__(self, key):
+        return Pying.nodes[self._node_name]["props"].get(key)
+
+    def __setattr__(self, key, value):
+        if key == "_node_name":
+            super().__setattr__(key, value)
+        else:
+            Pying.nodes[self._node_name]["props"][key] = value
+            if key == "parent":
+                Pying.nodes[self._node_name]["parent"] = value
+
+def prop(nodeName):
+    if nodeName not in Pying.nodes:
+        raise Exception(f"NODE_NOT_FOUND × El nodo '{nodeName}' no existe.")
+    Pying.current_node = nodeName
+    return PropManager(nodeName)
+
+def set_val(propName, value):
+    if not Pying.current_node:
+        raise Exception("SYNTAX_ERROR × 'set_val' fue llamado sin usar 'prop()' antes.")
+    Pying.nodes[Pying.current_node]["props"][propName] = value
+
+def InstanceNew(propName):
+    Pying.instances.add(propName)
+
+def var(name, value):
+    Pying.globals[name] = value
+
+def f(name):
+    def decorator(func):
+        Pying.functions[name] = func
+        return func
+    return decorator
+
+def coll(node1Name, node2Name):
+    n1 = Pying.nodes.get(node1Name)
+    n2 = Pying.nodes.get(node2Name)
+    if not n1 or not n2: return False
+    pos1 = n1["props"].get("pos")
+    pos2 = n2["props"].get("pos")
+    if pos1 is None or pos2 is None: return False
+    return pos1 == pos2
+
+def input_key(expectedKey):
+    return Pying.keys.get(expectedKey.lower(), False)
+
+def game_over():
+    if os.name == 'posix':
+        sys.stdout.write('\033[H\033[J')
+    else:
+        os.system('cls')
+    print("GAME OVER")
+    sys.exit()
+
+def checkPosisionBug():
+    for name, node in Pying.nodes.items():
+        current_parent_name = node["parent"]
+
+        while current_parent_name:
+            parent_node = Pying.nodes.get(current_parent_name)
+            node_pos = node["props"].get("pos")
+            parent_pos = parent_node["props"].get("pos") if parent_node else None
+
+            if parent_node and node_pos is not None and parent_pos is not None:
+                if node_pos == parent_pos:
+                    raise Exception(f"MAP_CORRUPTION × Ancestor-descendant collision at pos={node_pos} (Nodo: {name} pisa a {current_parent_name})")
+
+            current_parent_name = parent_node["parent"] if parent_node else None
+
+def render():
+    # Creamos un buffer de pantalla 2D basado en la altura y distancia configuradas
+    height_dist = Pying.screen_height
+    grid_render = [[Pying.floor["form"]] * Pying.floor["dist"] for _ in range(height_dist)]
+    occupied_by = {}
+
+    for name, node in Pying.nodes.items():
+        # --- PROCESAMIENTO ÚNICO PARA NODOS TIPO TEXTO / LABEL ---
+        if "text" in node["props"]:
+            text_val = str(node["props"]["text"])
+            sep = node["props"].get("separation", 0)
+            
+            # 3. Separación
+            if sep and isinstance(sep, int) and sep > 0:
+                text_val = (" " * sep).join(list(text_val))
+                
+            font_style = node["props"].get("font", "normal")
+            color_name = node["props"].get("color", "")
+            
+            # 1. Color & 2. Font (Códigos ANSI nativos)
+            f_code = {"bold": "\033[1m", "italic": "\033[3m", "underline": "\033[4m"}.get(font_style, "")
+            c_code = {
+                "red": "\033[31m", "green": "\033[32m", "yellow": "\033[33m", 
+                "blue": "\033[34m", "magenta": "\033[35m", "cyan": "\033[36m", "white": "\033[37m"
+            }.get(color_name, "")
+            r_code = "\033[0m" if (f_code or c_code) else ""
+            
+            node["props"]["form"] = f"{f_code}{c_code}{text_val}{r_code}"
+
+        pos = node["props"].get("pos")
+        form = node["props"].get("form")
+        height = node["props"].get("height", 0)  # Altura calculada por gravedad/salto (0 = Suelo)
+
+        if pos is not None and form is not None:
+            pos_idx = int(pos) - 1
+            row_idx = (height_dist - 1) - int(height)  # Mapeo invertido para la consola (0 abajo)
+
+            if 0 <= pos_idx < Pying.floor["dist"] and 0 <= row_idx < height_dist:
+                cell_key = (row_idx, pos_idx)
+                if cell_key in occupied_by:
+                    other_node = occupied_by[cell_key]
+                    if node["parent"] != other_node["parent"]:
+                        raise Exception(f"MAP_CORRUPTION × Double render at pos={pos} by '{name}' and '{other_node['name']}' (No son hermanos)")
+
+                grid_render[row_idx][pos_idx] = form
+                occupied_by[cell_key] = node
+
+    if os.name == 'posix':
+        sys.stdout.write('\033[H\033[J')
+    else:
+        os.system('cls')
+
+    # Volcado completo del buffer bidimensional
+    screen_output = ""
+    for row in grid_render:
+        screen_output += "".join(row) + "\n"
+        
+    sys.stdout.write(screen_output)
+    sys.stdout.flush()
+
+def get_async_input():
+    if os.name == 'nt':
+        import msvcrt
+        if msvcrt.kbhit():
+            return msvcrt.getch().decode('utf-8').lower()
+    else:
+        import select, tty, termios
+        if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
+            old_settings = termios.tcgetattr(sys.stdin)
+            try:
+                tty.setcbreak(sys.stdin.fileno())
+                return sys.stdin.read(1).lower()
+            finally:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+    return None
+
+def startLoop():
+    frameDelay = 1 / 30
+
+    while True:
+        start_time = time.time()
+
+        checkPosisionBug()
+        render()
+
+        Pying.keys = {}
+        char = get_async_input()
+        if char:
+            Pying.keys[char] = True
+
+        if input_key("q"):
+            break
+
+        # =========================================================
+        # SISTEMA FÍSICO INTEGRADO: GRAVEDAD, SALTO Y PROYECTILES
+        # =========================================================
+        for name, node in list(Pying.nodes.items()):
+            props = node["props"]
+
+            # Mecánica Automática de Salto vía input_key
+            if "jump_key" in props:
+                if Pying.keys.get(props["jump_key"].lower(), False):
+                    if props.get("height", 0) == 0:  # Validar que esté pisando el suelo
+                        props["gravity"] = True
+                        props["v_speed"] = 1.6  # Impulso vertical inicial
+
+            # Mecánica de Disparo Complejo vía input_key (Requiere e induce gravedad)
+            if "shoot_key" in props:
+                if Pying.keys.get(props["shoot_key"].lower(), False):
+                    bullet_id = f"bullet_{name}_{time.time()}"
+                    new(bullet_id)
+                    bp = prop(bullet_id)
+                    bp.pos = props.get("pos", 1) + 1
+                    bp.height = props.get("height", 0)
+                    bp.form = "o"
+                    bp.is_projectile = True
+                    bp.speed = 1
+                    bp.gravity = True  # Disparar -> requiere e implementa gravedad inherente
+                    bp.v_speed = 0.5   # Arco parabólico inicial hacia arriba
+
+            # Simulación Dinámica de Gravedad
+            if props.get("gravity", False):
+                h = props.get("height", 0)
+                vs = props.get("v_speed", 0)
+                if h > 0 or vs != 0:
+                    vs -= 0.3  # Constante de aceleración gravitatoria g hacia abajo
+                    h += vs
+                    if h <= 0:
+                        h = 0
+                        vs = 0
+                    props["height"] = h
+                    props["v_speed"] = vs
+
+            # Ciclo de Vida y Desplazamiento de Proyectiles Complejos
+            if props.get("is_projectile", False):
+                props["pos"] = props.get("pos", 1) + props.get("speed", 1)
+                # Liberación de memoria automática al salir de los límites fijos
+                if props["pos"] > Pying.floor["dist"] or props["pos"] < 1:
+                    if name in Pying.nodes:
+                        del Pying.nodes[name]
+
+        if Pying.user_loop:
+            Pying.user_loop()
+
+        elapsed = time.time() - start_time
+        if elapsed < frameDelay:
+            time.sleep(frameDelay - elapsed)
+
+class AllSys:
+    @staticmethod
+    def code(start_block, loop_block):
+        start_block()
+        Pying.user_loop = loop_block
+        startLoop()
+
+Pying.allSys = AllSys()
